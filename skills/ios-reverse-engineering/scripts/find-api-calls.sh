@@ -207,9 +207,11 @@ if [[ "$SEARCH_ALL" == true || "$SEARCH_SECURITY" == true ]]; then
   section "Jailbreak Detection"
   run_grep '(Cydia|/Applications/Cydia\.app|cydia://|/bin/bash|/usr/sbin/sshd|/etc/apt|/private/var/lib|canOpenURL.*cydia|fork\(\)|MobileSubstrate|SubstrateLoader|isJailbroken|jailbreak|substrate)'
   section "Debug & Development Flags"
-  run_grep -i '(#if\s+DEBUG|isDebug|debugMode|staging|dev[_-]?mode|enableLogging|LOG_LEVEL|VERBOSE|NSLog|print\(|os_log|Logger\.|\.debug\()'
-  section "Exposed Secrets & Credentials"
-  run_grep -i '(password\s*[:=]\s*"|secret\s*[:=]\s*"|private[_-]?key|encryption[_-]?key|aes[_-]?key|iv[_-]?vector|salt\s*=|firebase[_-]?key|aws[_-]?key|google[_-]?api|maps[_-]?key|stripe[_-]?key|sendgrid|twilio|paypal)'
+  run_grep -i '(#if\s+DEBUG|isDebug|debugMode|staging|dev[_-]?mode|enableLogging|LOG_LEVEL|VERBOSE)'
+  section "Exposed Secrets & Credentials (broad — use deep-secret-scan.sh for validated, FP-filtered detection)"
+  run_grep -i '(password\s*[:=]\s*"[^"]{8,}"|secret\s*[:=]\s*"[^"]{8,}"|private[_-]?key\s*[:=]\s*"|encryption[_-]?key\s*[:=]\s*"[^"]{8,}"|aes[_-]?key\s*[:=]\s*"|iv[_-]?vector\s*[:=]\s*"|salt\s*=\s*@"|firebase[_-]?key|aws[_-]?key|google[_-]?api|maps[_-]?key|stripe[_-]?key|sendgrid|twilio|paypal)'
+  section "Logging Usage (NOT a vuln alone — sensitive-logging detection lives in audit-vulnerabilities.sh --logging)"
+  run_grep -i '(NSLog|print\(|os_log|Logger\.|\.debug\()'
   section "Crypto & Encryption Usage"
   run_grep '(CCCrypt|CC_MD5|CC_SHA|CommonCrypto|SecKey|kCCAlgorithmAES|kCCEncrypt|kCCDecrypt|CryptoKit|AES\.GCM|SHA256|P256|Curve25519|HMAC|SymmetricKey|SecureEnclave)'
   section "Keychain Security Level"

@@ -1,6 +1,6 @@
 ---
 name: ios-reverse-engineering
-description: Extract and analyze iOS IPA, .app bundles, Mach-O binaries, .dylib, and .framework files using ipsw, otool, strings, radare2/rizin, and Ghidra headless. Reverse engineer iOS apps, extract HTTP API endpoints (URLSession, Alamofire, Moya, AFNetworking, GraphQL, WebSocket), trace call flows from ViewControllers to network layer, analyze security patterns (ATS, cert pinning, keychain, jailbreak detection), deep-scan for cloud credentials (Firebase, AWS, GCP, Azure, Stripe), perform LLM-assisted binary reversing analysis with Ghidra scripts, fingerprint embedded third-party SDKs with CVE checking, and detect anti-tampering protections (obfuscation, anti-debug, dylib injection prevention, integrity checks). Use when the user wants to extract, analyze, or reverse engineer iOS packages, find API endpoints, follow call flows, audit app security, scan for leaked secrets, identify third-party SDKs, detect app protections, or perform deep binary analysis.
+description: Extract and analyze iOS IPA, .app bundles, Mach-O binaries, .dylib, and .framework files using ipsw, otool, strings, radare2/rizin, and Ghidra headless. Reverse engineer iOS apps, extract HTTP API endpoints (URLSession, Alamofire, Moya, AFNetworking, GraphQL, WebSocket), trace call flows from ViewControllers to network layer, analyze security patterns (ATS, cert pinning, keychain, jailbreak detection), audit static iOS vulnerabilities (insecure local storage, WebView/JS-bridge, deeplink/URL-scheme hijack, weak crypto/RNG, biometric-bypass patterns, sensitive-data logging, ATS detail, privacy/tracking, entitlements risk, debug artifacts), deep-scan for cloud & SaaS credentials (Firebase, AWS, GCP, Azure, Stripe, GitHub, GitLab, Twilio, SendGrid, Slack, Telegram, web3) with false-positive minimization (placeholder allowlist, format/entropy validation, client-safe tagging), perform LLM-assisted binary reversing analysis with Ghidra scripts, fingerprint embedded third-party SDKs with CVE checking, and detect anti-tampering protections (obfuscation, anti-debug, dylib injection prevention, integrity checks). Use when the user wants to extract, analyze, or reverse engineer iOS packages, find API endpoints, follow call flows, audit app security or vulnerabilities, scan for leaked secrets, identify third-party SDKs, detect app protections, or perform deep binary analysis.
 ---
 
 # iOS Reverse Engineering
@@ -236,6 +236,19 @@ Perform a comprehensive scan for cloud provider credentials, API keys, and secre
 bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/deep-secret-scan.sh <output>/ --report secrets-report.md
 ```
 
+**False-positive minimization (built in)**: the scanner extracts candidate secrets by **value** (not grep line) and deduplicates, so a secret in 3 files is 1 finding. Each candidate is then validated against:
+- a **placeholder allowlist** (`AKIAIOSFODNN7EXAMPLE`, `your_key`, `sk_test`/`pk_test` via a separate lower-severity pattern, `<...>`, `placeholder`, etc.) → downgraded to INFO,
+- a **strict format/charset check** per provider (AWS `AKIA` + 16, GCP `AIza` + 35, Stripe prefix + 24, JWT 3-segment header, etc.) → mismatch raises FP-likelihood,
+- **Shannon entropy** (< ~3.0 bits/char → likely binary artifact, not a secret),
+- a **client-safe flag** (Firebase API Key, Stripe publishable, Mapbox public, Infura/Alchemy → `client-safe=yes`, critical downgraded to medium).
+
+Every finding carries an **FP-likelihood** (Low/Medium/High) and **client-safe** tag. Use `--raw` to disable all filtering for brute-force triage (matches are still tagged with FP-likelihood). Config indicators (SDK class names, endpoint URLs) are reported as INFO and excluded from critical/high totals.
+
+```bash
+# Brute-force: keep every match (placeholders still listed, tagged FP:High)
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/deep-secret-scan.sh <output>/ --raw --severity info --report secrets-raw.md
+```
+
 Targeted scans:
 ```bash
 # Firebase / Google only
@@ -261,6 +274,12 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/deep-secret-sc
 
 # JWT tokens
 bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/deep-secret-scan.sh <output>/ --jwt
+
+# Developer-platform keys (GitHub, GitLab, Mailgun, Mailchimp, Telegram, Square)
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/deep-secret-scan.sh <output>/ --devtools
+
+# Web3 keys (Infura, Alchemy, Ethereum private keys, PEM blocks)
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/deep-secret-scan.sh <output>/ --web3
 
 # Critical and high severity only
 bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/deep-secret-scan.sh <output>/ --severity high --report secrets-report.md
@@ -474,6 +493,51 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/detect-protect
 
 See `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/anti-tampering-patterns.md` for the full reference on protection patterns and detection techniques.
 
+### Phase 11: Static Vulnerability Audit
+
+Audit the extracted app for iOS-specific vulnerability classes that pattern-level security scans (Phase 6) and secret scans (Phase 7) don't cover. This complements those phases: it hunts *vulnerability patterns*, not API calls or credential values.
+
+**Action**: Run the vulnerability auditor:
+
+```bash
+# Full audit across all categories, with a Markdown report
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/audit-vulnerabilities.sh <output>/ --all --report vuln-report.md
+```
+
+Category filters (run individually or combine):
+```bash
+# Insecure local storage (UserDefaults tokens, sqlite/realm, UIFileSharingEnabled, file protection off)
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/audit-vulnerabilities.sh <output>/ --storage
+
+# WebView / JS-bridge (UIWebView, allowUniversalAccessFromFileURLs, addScriptMessageHandler, TLS-bypass)
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/audit-vulnerabilities.sh <output>/ --webview
+
+# Deeplink / URL-scheme hijack (custom schemes, token-in-callback, universal links)
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/audit-vulnerabilities.sh <output>/ --deeplink
+
+# Weak crypto / RNG (ECB, arc4random/rand for tokens, MD5/SHA1, hardcoded IV/salt)
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/audit-vulnerabilities.sh <output>/ --crypto
+
+# Biometric/local-auth, sensitive-data logging, ATS detail, privacy/tracking, entitlements, debug artifacts
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/audit-vulnerabilities.sh <output>/ --auth --logging --network --privacy --entitlements --debug
+
+# Only high/critical findings
+bash ${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/scripts/audit-vulnerabilities.sh <output>/ --all --severity high --report vuln-report.md
+```
+
+**Categories detected**: insecure local storage, WebView/JS-bridge, deeplink/URL-scheme hijack, weak crypto/RNG, biometric/local-auth patterns, sensitive-data logging, ATS detail (NSAllowsArbitraryLoads/ForMedia, NSMinimumTLSVersion, NSRequiresForwardSecrecy), cleartext/insecure-WebSocket, privacy/tracking (IDFA without ATT, pasteboard, screen-capture), entitlements risk (disable-library-validation, app groups, shared keychain), debug/staging artifacts.
+
+Each finding carries **Severity**, **Confidence**, **FP-likelihood** (Low/Medium/High), and **Evidence** (file:line). Proximity-based findings (logging-of-secrets, token-in-UserDefaults, RNG-for-token) are one-line co-occurrence matches: the line contains BOTH a trigger and a secret keyword — treat as a MEDIUM-confidence signal and review the surrounding function for multi-line cases. Absence-based findings (no `NSURLFileProtectionKey`, no screen-capture guard) are FP-likelihood=HIGH by design.
+
+**LLM Analysis**: After the audit completes, triage using the FP-likelihood field:
+
+1. **Triage by FP-likelihood first** — High-FP findings (absence-based, permissive proximity) need manual confirmation before action.
+2. **Then by Severity × Confidence** — critical/high + high-confidence = act now; medium = investigate.
+3. **Map evidence back to code** — read the `file:line:match` in the decompiled/class-dumped output (Phase 8) to confirm exploitability.
+4. **Cross-reference** — correlate with `deep-secret-scan.sh` (Phase 7) for actual credential values and `detect-protections.sh` (Phase 10) for whether anti-tampering would block dynamic confirmation.
+
+See `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/vulnerability-patterns.md` for the full pattern reference (severity, FP notes, vulnerable code, remediation).
+
 ## Output
 
 At the end of the workflow, deliver:
@@ -483,10 +547,11 @@ At the end of the workflow, deliver:
 3. **API documentation** — all discovered endpoints in the format above
 4. **Call flow map** — key paths from UI to network (especially authentication and main features)
 5. **Security findings** — ATS config, cert pinning status, exposed secrets, jailbreak detection, crypto issues
-6. **Cloud credential report** — all cloud provider secrets found, classified by service, severity, and risk (Phase 7)
+6. **Cloud credential report** — validated, FP-filtered secrets with FP-likelihood and client-safe tags (Phase 7)
 7. **Deep binary analysis** — decompiled functions, cross-references, crypto analysis, data flow findings (Phase 8)
 8. **SDK inventory** — all third-party SDKs identified, with versions, categories, CVE matches, and risk assessment (Phase 9)
 9. **Protection assessment** — anti-tampering mechanisms, obfuscation, anti-debug, injection prevention, with protection score (Phase 10)
+10. **Vulnerability audit report** — iOS vulnerability classes (storage, WebView, deeplink, crypto, auth, logging, ATS, privacy, entitlements, debug) with severity/confidence/FP-likelihood/evidence (Phase 11)
 
 Use `--report report.md` on find-api-calls.sh, deep-secret-scan.sh, detect-sdks.sh, and detect-protections.sh to generate structured Markdown reports automatically.
 
@@ -496,7 +561,8 @@ Use `--report report.md` on find-api-calls.sh, deep-secret-scan.sh, detect-sdks.
 - `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/class-dump-usage.md` — ipsw class-dump CLI options, Swift support, and Mach-O analysis
 - `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/api-extraction-patterns.md` — Library-specific search patterns and documentation template
 - `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/call-flow-analysis.md` — Techniques for tracing call flows in iOS apps
-- `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/cloud-secrets-patterns.md` — Cloud provider credential patterns (Firebase, GCP, AWS, Azure, Stripe, etc.)
+- `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/cloud-secrets-patterns.md` — Cloud provider credential patterns (Firebase, GCP, AWS, Azure, Stripe, GitHub, GitLab, web3, etc.) and false-positive minimization
 - `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/reversing-tools-guide.md` — CLI reversing tools reference (radare2, rizin, Ghidra headless)
 - `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/sdk-fingerprinting.md` — SDK fingerprint database, class prefixes, version extraction, and CVE reference
 - `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/anti-tampering-patterns.md` — Anti-tampering, obfuscation, anti-debug, and injection prevention patterns
+- `${CLAUDE_PLUGIN_ROOT}/skills/ios-reverse-engineering/references/vulnerability-patterns.md` — iOS vulnerability classes (storage, WebView, deeplink, crypto, auth, logging, ATS, privacy, entitlements, debug) with FP notes and remediation

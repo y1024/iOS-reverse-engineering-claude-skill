@@ -218,6 +218,105 @@ grep -rni 'algolia\|ALGOLIA_API_KEY\|applicationID.*algolia\|algolianet\.com' ou
 grep -rni 'pusher\|PusherSwift\|Pusher(\|pubnub\|PubNub\|subscribeKey\|publishKey' output/
 ```
 
+## Developer-platform & SaaS keys (new)
+
+These provider keys are validated by `deep-secret-scan.sh` (format + entropy + allowlist)
+and reported with an FP-likelihood tag.
+
+| Provider | Pattern | Risk | Client-safe? |
+|----------|---------|------|--------------|
+| **GitHub** | `(ghp\|gho\|ghs\|ghr\|ghu)_[A-Za-z0-9]{36}` | Critical (repo/org access) | No |
+| **GitLab** | `glpat-[A-Za-z0-9_-]{20}` | Critical | No |
+| **Mailgun** | `key-[a-f0-9]{32}` | High (send mail as domain) | No |
+| **Mailchimp** | `[a-f0-9]{32}-us[0-9]{1,2}` | High (audience access) | No |
+| **Telegram** (bot) | `[0-9]{8,10}:[A-Za-z0-9_-]{34,40}` | High | No |
+| **Square** | `sq0[a-z][a-z0-9_-]{20,}` | High | No |
+| **Cloudflare** | API key: 37 hex; token: `cf_`-prefixed | High | No |
+| **Mapbox** | public `pk.*\.`, secret `sk.*\.` | Public=Low, Secret=Critical | Public yes |
+| **Infura** | `https://<key>.infura.io/v3/[A-Za-z0-9]{32}` | High (RPC access) | Mostly |
+| **Alchemy** | `https://<network>.g.alchemy.com/<api>/<key>` | High | Mostly |
+| **Ethereum** private key | `(0x)?[0-9a-fA-F]{64}` | Critical (drain wallet) | No |
+| **Private key blocks** | `BEGIN (RSA\|OPENSSH\|EC\|PGP )?PRIVATE KEY` | Critical | No |
+
+```bash
+# Developer-platform
+grep -rnE '(ghp|gho|ghs|ghr|ghu)_[A-Za-z0-9]{36}|glpat-[A-Za-z0-9_-]{20}|key-[a-f0-9]{32}|[a-f0-9]{32}-us[0-9]{1,2}|[0-9]{8,10}:[A-Za-z0-9_-]{34,40}|sq0[a-z][a-z0-9_-]{20,}' output/
+
+# Web3
+grep -rniE 'https://[a-z0-9]*\.infura\.io/v3/[A-Za-z0-9]{32}|https://[a-z-]*\.g\.alchemy\.com/[a-z0-9]+/[A-Za-z0-9_-]{30,}|BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY|(0x)?[0-9a-fA-F]{64}' output/
+```
+
+> **Caution — Ethereum private keys:** the `[0-9a-fA-F]{64}` pattern is broad and matches
+> transaction hashes, file hashes, and random hex. The scan validates entropy and flags
+> FP-likelihood HIGH for low-entropy hex. Treat any 64-hex hit as a *candidate* and confirm
+> against context (e.g. named `privateKey`, `mnemonic`-derived) before escalating.
+
+## False-positive minimization
+
+The `deep-secret-scan.sh` scan applies these filters (disable with `--raw`). Each finding
+keeps an **FP-likelihood** tag (Low/Medium/High) so the LLM can triage.
+
+### 1. Placeholder / example allowlist
+
+Values matching these are downgraded to INFO (unless `--raw`):
+
+| Placeholder | Example |
+|------------|---------|
+| `AKIAIOSFODNN7EXAMPLE` | AWS documented example access key |
+| `wJalrXUtnFEMI...EXAMPLEKEY` | AWS documented example secret |
+| `example.com`, `your_key`, `YOUR_API_KEY`, `<token>` | docs strings |
+| `^x{3,}$`, `^abc123$`, `^test$`, `placeholder`, `dummy`, `redacted` | obvious dummies |
+| `firebase_example`, `sentry_example` | provider example configs |
+
+> Note: bare numeric runs like `123456789` are **not** allowlisted — real secrets legitimately
+> contain digit runs, so substring-matching them would drop real keys.
+
+### 2. Format / charset validation
+
+| Provider | Validated format |
+|----------|------------------|
+| AWS Access Key | `(AKIA\|ASIA\|AGPA\|AIDA\|AROA\|AIPA\|ANPA\|ANVA\|ASCA)[0-9A-Z]{16}` |
+| GCP API Key | `AIza[0-9A-Za-z_-]{35}` |
+| Stripe | `(sk\|pk\|rk)_(live\|test)_[0-9a-zA-Z]{24,}` |
+| Twilio | `AC[0-9a-f]{32}` / `SK[0-9a-f]{32}` |
+| SendGrid | `SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}` |
+| Slack | `xox[abprs]-[0-9]{10,}-[0-9]{10,}-[A-Za-z0-9]{20,}` |
+| GitHub | `(ghp\|gho\|ghs\|ghr\|ghu)_[A-Za-z0-9]{36}` |
+| GitLab | `glpat-[A-Za-z0-9_-]{20}` |
+| JWT | 3 base64url segments; header decodes to JSON with `alg`/`typ` |
+
+A value that *looks* like a key (matches a prefix) but fails the strict format gets
+FP-likelihood raised (e.g. `AKIA1234567890ABCDEF` valid; `AKIA1234` → format mismatch → HIGH FP).
+
+### 3. Shannon entropy
+
+Bits/char across the candidate value. Strings ≥20 chars below ~3.0 bits/char are usually
+binary artifacts/hashes, not secrets → FP-likelihood raised. Real keys (40+ chars of mixed
+case + digits) are typically 4.0–6.0 bits/char.
+
+### 4. Client-safe vs server-side
+
+Some keys are **designed** to ship in client binaries — they don't grant server-side access
+on their own. The scan flags these `client-safe=yes` and downgrades critical→medium:
+
+| Client-safe (low/medium impact) | Server-side (critical) |
+|----------------------------------|------------------------|
+| Firebase API Key (`AIza...`, restricted) | Stripe `sk_live_*` |
+| Stripe publishable `pk_live_*` | AWS secret access key |
+| GCP OAuth client ID | Slack `xoxb-*` / `xoxp-*` |
+| Mapbox public key | GitHub `ghp_*` / GitLab `glpat-*` |
+| Infura/Alchemy (rate-limited RPC) | Ethereum private key |
+
+> A client-safe key still has impact (quota abuse, enumeration, unrestricted API key abuse) —
+> "client-safe" means *intended for client use*, not "harmless". Apply API key restrictions
+> (referrer/Bundle ID) and least-privilege scopes.
+
+### 5. Dedup by value
+
+Candidates are extracted with `grep -oE` and deduplicated **by value** (a secret in 3 files
+counts once), not by grep line. The previous behavior triple-counted any secret present in
+`strings-raw.txt`, `strings-urls-and-keys.txt`, and `symbols.txt`.
+
 ## Regex Summary for Binary Scanning
 
 These high-confidence regexes can be run directly against `strings-raw.txt`:
@@ -226,17 +325,26 @@ These high-confidence regexes can be run directly against `strings-raw.txt`:
 # All high-confidence patterns in one scan
 grep -E \
   'AIza[0-9A-Za-z_-]{35}|'\
-  'AKIA[0-9A-Z]{16}|'\
+  '(AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASCA)[0-9A-Z]{16}|'\
   'sk_live_[0-9a-zA-Z]{24,}|'\
   'sk_test_[0-9a-zA-Z]{24,}|'\
   'SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}|'\
-  'xoxb-[0-9]{11}-[0-9]{11}-[a-zA-Z0-9]{24}|'\
+  'xox[abprs]-[0-9]{10,}-[0-9]{10,}-[A-Za-z0-9]{20,}|'\
   'AC[0-9a-f]{32}|'\
   'DefaultEndpointsProtocol=https|'\
   'AccountKey=[A-Za-z0-9+/=]{86,}|'\
+  '(ghp|gho|ghs|ghr|ghu)_[A-Za-z0-9]{36}|'\
+  'glpat-[A-Za-z0-9_-]{20}|'\
+  'key-[a-f0-9]{32}|'\
+  '[0-9]{8,10}:[A-Za-z0-9_-]{34,40}|'\
+  'BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY|'\
   'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' \
   output/strings-raw.txt
 ```
+
+> These are raw high-confidence formats. The `deep-secret-scan.sh` script applies the
+> allowlist + format + entropy + dedup filters on top of them and tags each with
+> FP-likelihood; prefer the script over a raw `grep` for reporting.
 
 ## JWT Token Detection
 
