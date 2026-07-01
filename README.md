@@ -31,13 +31,13 @@ The skill includes dependency check and auto-install scripts that handle setup a
 Add this repository as a skill in your Claude Code project:
 
 ```bash
-claude mcp add-skill ios-reverse-engineering https://github.com/<owner>/iOS-claude-skill.git
+claude mcp add-skill ios-reverse-engineering https://github.com/incogbyte/iOS-claude-skill.git
 ```
 
 Or clone and add locally:
 
 ```bash
-git clone https://github.com/<owner>/iOS-claude-skill.git
+git clone https://github.com/incogbyte/iOS-claude-skill.git
 ```
 
 Then reference the skill directory in your Claude Code configuration.
